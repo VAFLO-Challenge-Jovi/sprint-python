@@ -4,12 +4,15 @@
 # persistência em JSON e integração por arquivo (exportação/importação).
 
 import base64
+import http.client
 import json
 import os
+import shutil
 import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+import webbrowser
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -21,9 +24,11 @@ PASTA_PROJETO = Path(__file__).resolve().parent
 ARQUIVO_DADOS = PASTA_PROJETO / "dados" / "capturas.json"
 ARQUIVO_EXPORTACAO = PASTA_PROJETO / "dados" / "exportacao_capturas.json"
 
-# Chave gratuita do OCR.space da equipe; pode ser trocada pela variável de ambiente OCR_SPACE_API_KEY.
+# A chave do OCR.space NÃO fica no código: defina a variável de ambiente OCR_SPACE_API_KEY
+# (chave gratuita em https://ocr.space/ocrapi/freekey). Sem ela, o OCR fica indisponível
+# e o programa oferece a digitação manual do texto.
 OCR_SPACE_URL = "https://api.ocr.space/parse/image"
-OCR_SPACE_API_KEY = os.environ.get("OCR_SPACE_API_KEY", "K83518232488957")
+OCR_SPACE_API_KEY = os.environ.get("OCR_SPACE_API_KEY", "").strip()
 OCR_TAMANHO_MAXIMO = 1024 * 1024  # limite do plano gratuito (1 MB)
 EXTENSOES_IMAGEM = (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".webp")
 
@@ -329,6 +334,7 @@ def carregar_dados(caminho: Path) -> dict:
         return dados_vazios()
 
     dados = dados_vazios()
+    descartados = 0
     for lista in ("capturas", "lixeira"):
         itens = conteudo.get(lista, [])
         if not isinstance(itens, list):
@@ -337,6 +343,19 @@ def carregar_dados(caminho: Path) -> dict:
         for item in itens:
             if captura_valida(item):
                 dados[lista].append(completar_captura(item))
+            else:
+                descartados += 1
+
+    if descartados:
+        # Guarda o arquivo original antes que o próximo salvamento o sobrescreva sem os inválidos.
+        backup = caminho.with_suffix(".bak")
+        try:
+            shutil.copy2(caminho, backup)
+            print(f"[!] {descartados} registro(s) inválido(s) ignorado(s) em {caminho.name}. "
+                  f"Original guardado em {backup.name}.")
+        except OSError:
+            print(f"[!] {descartados} registro(s) inválido(s) ignorado(s) em {caminho.name} "
+                  "(não foi possível criar o backup).")
     return dados
 
 
@@ -390,6 +409,9 @@ def requisitar_json(url: str, metodo: str = "GET", formulario: dict | None = Non
         raise ErroAPI(f"sem conexão com o serviço ({erro.reason}). Verifique sua internet.") from erro
     except TimeoutError as erro:
         raise ErroAPI(f"o serviço não respondeu em {TIMEOUT_SEGUNDOS} segundos.") from erro
+    except (OSError, http.client.HTTPException) as erro:
+        # Conexão derrubada ou resposta cortada no meio (ex.: ConnectionResetError, IncompleteRead).
+        raise ErroAPI("a conexão com o serviço foi interrompida. Tente novamente.") from erro
     except (json.JSONDecodeError, UnicodeDecodeError) as erro:
         raise ErroAPI("o serviço retornou uma resposta em formato inesperado.") from erro
 
@@ -425,6 +447,9 @@ def extrair_texto_ocr(origem: str, idioma: str) -> str:
     Envia uma imagem (caminho local ou URL http/https) para a API OCR.space
     e retorna o texto reconhecido.
     """
+    if not OCR_SPACE_API_KEY:
+        raise ErroAPI("chave do OCR.space não configurada (variável de ambiente OCR_SPACE_API_KEY).")
+
     formulario = {"apikey": OCR_SPACE_API_KEY, "language": idioma, "scale": "true", "OCREngine": "2"}
     if origem.lower().startswith(("http://", "https://")):
         formulario["url"] = origem
@@ -500,6 +525,11 @@ def capturar_texto(dados: dict) -> bool:
     print("  2. Digitar o texto manualmente")
     modo = ler_inteiro("Como deseja capturar? (1-2): ", 1, 2)
 
+    if modo == 1 and not OCR_SPACE_API_KEY:
+        print("[!] OCR indisponível: a variável de ambiente OCR_SPACE_API_KEY não está definida (veja o README).")
+        print("    Você pode digitar o texto manualmente.")
+        modo = 2
+
     texto = ""
     origem = "manual"
     if modo == 1:
@@ -564,16 +594,30 @@ def selecionar_captura(capturas: list, acao: str) -> dict | None:
     return capturas[escolha - 1]
 
 
+def oferecer_abrir_no_navegador(url: str) -> None:
+    """Pergunta se o usuário quer abrir `url` no navegador padrão e abre em caso afirmativo."""
+    if not confirmar("Abrir no navegador?"):
+        return
+    try:
+        aberto = webbrowser.open(url)
+    except webbrowser.Error:
+        aberto = False
+    if not aberto:
+        print("[!] Não foi possível abrir o navegador. Copie o link acima.")
+
+
 def pesquisar_no_google(dados: dict) -> bool:
-    """Gera e exibe a URL de pesquisa no Google para um texto do histórico."""
+    """Gera a URL de pesquisa no Google para um texto do histórico e oferece abri-la no navegador."""
     print("\n--- PESQUISAR NO GOOGLE ---")
     captura = selecionar_captura(dados["capturas"], "pesquisa")
     if captura is None:
         return False
 
+    url = montar_url_busca_google(captura["texto"])
     print("\n[✓] Link de pesquisa gerado!")
     print(f"    Texto : \"{resumir_texto(captura['texto'], 60)}\"")
-    print(f"    URL   : {montar_url_busca_google(captura['texto'])}")
+    print(f"    URL   : {url}")
+    oferecer_abrir_no_navegador(url)
     return False
 
 
@@ -594,8 +638,10 @@ def traduzir_texto(dados: dict) -> bool:
     try:
         traducao = traduzir_via_api(texto, codigo)
     except ErroAPI as erro:
+        url = montar_url_traducao(captura["texto"], codigo)
         print(f"[!] Não foi possível traduzir: {erro}")
-        print(f"    Use o link do Google Tradutor: {montar_url_traducao(captura['texto'], codigo)}")
+        print(f"    Use o link do Google Tradutor: {url}")
+        oferecer_abrir_no_navegador(url)
         return False
 
     print("\n[✓] Tradução concluída!")
@@ -616,7 +662,9 @@ def consultar_wikipedia(dados: dict) -> bool:
     if captura is None:
         return False
 
-    termo = resumir_texto(captura["texto"], 100).rstrip(".")
+    sugestao = resumir_texto(captura["texto"], 100).rstrip(".")
+    print(f"\nTermo sugerido: \"{sugestao}\"")
+    termo = ler_texto("Termo da busca (Enter usa o sugerido): ", permitir_vazio=True) or sugestao
     print(f"\nBuscando \"{termo}\" na Wikipédia... aguarde.")
     try:
         resultado = buscar_resumo_wikipedia(termo)
@@ -821,7 +869,8 @@ def importar_capturas(dados: dict) -> bool:
     validas = [completar_captura(item) for item in conteudo if captura_valida(item)]
     adicionadas = mesclar_capturas(dados, validas)
     ignoradas = len(conteudo) - adicionadas
-    print(f"[✓] {adicionadas} captura(s) importada(s). {ignoradas} ignorada(s) (repetidas ou inválidas).")
+    print(f"[✓] {adicionadas} captura(s) importada(s). {ignoradas} ignorada(s) "
+          "(já existem no histórico ou na lixeira, ou são inválidas).")
     return adicionadas > 0
 
 
