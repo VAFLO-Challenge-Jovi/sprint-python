@@ -1,0 +1,38 @@
+[
+  {
+    "id": "a1b2c3d4",
+    "texto": "O Pequeno Príncipe\nAntoine de Saint-Exupéry",
+    "tipo": "Texto impresso",
+    "categoria": "Livros",
+    "origem": "ocr",
+    "criado_em": "2026-10-15T11:56:10",
+    "atualizado_em": null,
+    "traducoes": []
+  },
+  {
+    "id": "b2c3d4e5",
+    "texto": "Fotossíntese\nluz + água + gás carbônico",
+    "tipo": "Lousa/Slide",
+    "categoria": "Estudos",
+    "origem": "ocr",
+    "criado_em": "2026-10-15T12:03:41",
+    "atualizado_em": null,
+    "traducoes": []
+  },
+  {
+    "id": "c3d4e5f6",
+    "texto": "Please keep the door closed\nEmergency exit only",
+    "tipo": "Texto impresso",
+    "categoria": "Idiomas",
+    "origem": "ocr",
+    "criado_em": "2026-10-15T12:10:27",
+    "atualizado_em": null,
+    "traducoes": [
+      {
+        "idioma": "pt",
+        "texto": "Por favor, mantenha a porta fechada\nSaída de emergência somente",
+        "em": "2026-10-15T12:11:02"
+      }
+    ]
+  }
+]
